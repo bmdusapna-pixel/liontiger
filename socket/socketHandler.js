@@ -6,29 +6,38 @@ const betTimeouts = new Map();
 
 const socketHandler = (io) => {
   io.on('connection', (socket) => {
-    console.log("User connected:", socket.id);
+    console.log("✅ User connected:", socket.id);
 
+    // ✅ Bet via socket
     socket.on('bet', async (data) => {
       const { userId, roundId, side, amount } = data;
+      // userId = firebaseUid (Flutter se aayega)
 
+      // Rate limiting
       const now = Date.now();
       const lastBet = betTimeouts.get(socket.id);
       if (lastBet && now - lastBet < 2000) {
-        return socket.emit('error', { message: "Too many requests. Please wait 2 seconds." });
+        return socket.emit('error', { message: "Too many requests. Please wait." });
       }
       betTimeouts.set(socket.id, now);
 
+      // Validation
       const parsedAmount = Math.floor(parseInt(amount));
       if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
         return socket.emit('error', { message: "Invalid amount" });
       }
-
-      if (parsedAmount < 10) return socket.emit('error', { message: "Minimum bet ₹10" });
-      if (parsedAmount > 50000) return socket.emit('error', { message: "Maximum bet ₹50,000" });
+      if (parsedAmount < 10) {
+        return socket.emit('error', { message: "Minimum bet 10 coins" });
+      }
+      if (parsedAmount > 50000) {
+        return socket.emit('error', { message: "Maximum bet 50,000 coins" });
+      }
 
       const currentRound = gameService.getCurrentRound();
+
+      // Socket ko firebaseUid se map karo
       gameService.setSocketMapping(userId, socket.id);
-      socket.userId = userId;
+      socket.userId = userId; // disconnect pe remove karne ke liye
 
       if (!["Lion", "Tiger", "Draw"].includes(side)) {
         return socket.emit('error', { message: "Invalid side" });
@@ -46,14 +55,19 @@ const socketHandler = (io) => {
       }
 
       try {
+        // ✅ WePlayChat User collection se coin deduct
         const user = await User.findOneAndUpdate(
-          { userId, balance: { $gte: parsedAmount } },
-          { $inc: { balance: -parsedAmount } },
+          {
+            firebaseUid: userId,
+            coin: { $gte: parsedAmount },
+            isBlock: false
+          },
+          { $inc: { coin: -parsedAmount } },
           { new: true }
         );
 
         if (!user) {
-          return socket.emit('error', { message: "Insufficient balance or user not found" });
+          return socket.emit('error', { message: "Insufficient coins or user not found" });
         }
 
         const bet = { userId, roundId, side, amount: parsedAmount, timestamp: now };
@@ -63,20 +77,22 @@ const socketHandler = (io) => {
         try {
           gameService.addBetToCache(bet);
         } catch (cacheErr) {
-          await User.findOneAndUpdate({ userId }, { $inc: { balance: parsedAmount } });
+          // Rollback
+          await User.findOneAndUpdate({ firebaseUid: userId }, { $inc: { coin: parsedAmount } });
           await Bet.deleteOne({ userId, roundId });
           return socket.emit('error', { message: cacheErr.message });
         }
 
+        // ✅ Confirm emit with coin
         socket.emit('betConfirmed', {
           message: "Bet placed!",
-          balance: user.balance,
+          coin: user.coin,
           side,
           amount: parsedAmount
         });
 
       } catch (err) {
-        console.error("Bet error:", err);
+        console.error("Bet socket error:", err);
         socket.emit('error', { message: "Server error" });
       }
     });

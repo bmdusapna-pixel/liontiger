@@ -3,32 +3,19 @@ import Bet from '../models/Bet.js';
 import RoundResult from '../models/RoundResult.js';
 import gameService from '../services/gameService.js';
 
+// ✅ Wallet fetch — firebaseUid se
 export const getWallet = async (req, res) => {
-  const { userId } = req.params;
+  const { userId } = req.params; // userId = firebaseUid
   try {
-    const user = await User.findOne({ userId });
+    const user = await User.findOne({ firebaseUid: userId }).select('coin uniqueId name');
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ balance: user.balance });
+    res.json({ coin: user.coin });
   } catch (err) {
     res.status(500).json({ error: "Server error" });
   }
 };
 
-export const register = async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
-  try {
-    let user = await User.findOne({ userId });
-    if (user) return res.status(400).json({ error: "User already exists" });
-    user = new User({ userId, balance: 1000 });
-    await user.save();
-    res.json({ status: "ok", balance: user.balance });
-  } catch (err) {
-    if (err.code === 11000) return res.status(400).json({ error: "User already exists" });
-    res.status(500).json({ error: "Server error" });
-  }
-};
-
+// ✅ Current round
 export const getCurrentRound = (req, res) => {
   const round = gameService.getCurrentRound();
   res.json({
@@ -39,8 +26,9 @@ export const getCurrentRound = (req, res) => {
   });
 };
 
+// ✅ Bet history — firebaseUid se
 export const getHistory = async (req, res) => {
-  const { userId } = req.params;
+  const { userId } = req.params; // userId = firebaseUid
   try {
     const bets = await Bet.find({ userId }).sort({ timestamp: -1 }).limit(50);
     res.json(bets.map(bet => ({
@@ -48,25 +36,34 @@ export const getHistory = async (req, res) => {
       side: bet.side,
       amount: bet.amount,
       won: bet.won,
-      payout: bet.payout
+      payout: bet.payout,
+      status: bet.status,
+      timestamp: bet.timestamp,
     })));
   } catch (err) {
     res.status(500).json({ error: "Server error" });
   }
 };
 
+// ✅ Place bet via HTTP — firebaseUid as userId
 export const placeBet = async (req, res) => {
   const { userId, roundId, side, amount } = req.body;
+  // userId = firebaseUid (Flutter se aayega)
+
   const parsedAmount = Math.floor(parseInt(amount));
 
   if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
     return res.status(400).json({ success: false, message: "Invalid amount" });
   }
-  
-  if (parsedAmount < 10) return res.status(400).json({ success: false, message: "Minimum bet ₹10" });
-  if (parsedAmount > 50000) return res.status(400).json({ success: false, message: "Maximum bet ₹50,000" });
+  if (parsedAmount < 10) {
+    return res.status(400).json({ success: false, message: "Minimum bet 10 coins" });
+  }
+  if (parsedAmount > 50000) {
+    return res.status(400).json({ success: false, message: "Maximum bet 50,000 coins" });
+  }
 
   const currentRound = gameService.getCurrentRound();
+
   if (!["Lion", "Tiger", "Draw"].includes(side)) {
     return res.status(400).json({ success: false, message: "Invalid side" });
   }
@@ -83,14 +80,22 @@ export const placeBet = async (req, res) => {
   }
 
   try {
+    // ✅ WePlayChat User collection se coin deduct
     const user = await User.findOneAndUpdate(
-      { userId, balance: { $gte: parsedAmount } },
-      { $inc: { balance: -parsedAmount } },
+      {
+        firebaseUid: userId,
+        coin: { $gte: parsedAmount },
+        isBlock: false             // Blocked users bet nahi kar sakte
+      },
+      { $inc: { coin: -parsedAmount } },
       { new: true }
     );
 
     if (!user) {
-      return res.status(400).json({ success: false, message: "Insufficient balance or user not found" });
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient coins or user not found"
+      });
     }
 
     const bet = { userId, roundId, side, amount: parsedAmount, timestamp: Date.now() };
@@ -100,12 +105,19 @@ export const placeBet = async (req, res) => {
     try {
       gameService.addBetToCache(bet);
     } catch (cacheErr) {
-      await User.findOneAndUpdate({ userId }, { $inc: { balance: parsedAmount } });
+      // Rollback — coin wapas karo
+      await User.findOneAndUpdate({ firebaseUid: userId }, { $inc: { coin: parsedAmount } });
       await Bet.deleteOne({ userId, roundId });
       return res.status(400).json({ success: false, message: cacheErr.message });
     }
 
-    res.json({ success: true, message: "Bet placed!", balance: user.balance });
+    res.json({
+      success: true,
+      message: "Bet placed!",
+      coin: user.coin,             // ✅ coin return
+      side,
+      amount: parsedAmount
+    });
 
   } catch (err) {
     console.error("Bet error:", err);
@@ -113,6 +125,7 @@ export const placeBet = async (req, res) => {
   }
 };
 
+// ✅ Recent results
 export const getRecentResults = async (req, res) => {
   try {
     const results = await RoundResult.find().sort({ timestamp: -1 }).limit(50);
@@ -122,6 +135,7 @@ export const getRecentResults = async (req, res) => {
   }
 };
 
+// ✅ Round stats
 export const getRoundStats = (req, res) => {
   const round = gameService.getCurrentRound();
   res.json({ roundId: round.roundId, totals: round.totals });

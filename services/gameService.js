@@ -15,12 +15,12 @@ class GameService {
       totals: { Lion: 0, Tiger: 0, Draw: 0 }
     };
     this.io = null;
-    this.userIdToSocket = new Map();
-    this.userLastBets = new Map();
+    this.userIdToSocket = new Map();   // firebaseUid → socketId
+    this.userLastBets = new Map();     // firebaseUid → bet history
 
-    this.EXPOSURE_LIMIT_PER_ROUND = 500000;
-    this.DAILY_MAX_LOSS_LIMIT = 500000;
-    this.HOUSE_EDGE_THRESHOLD = 3000;
+    this.EXPOSURE_LIMIT_PER_ROUND = 1500000; // 15 Lakh (Kyunki 1L bet on Draw = 9L exposure)
+    this.DAILY_MAX_LOSS_LIMIT = 2000000;    // 20 Lakh Max Daily Loss
+    this.HOUSE_EDGE_THRESHOLD = 10000;      // 10,000 tak Fair, usse upar House Optimization shuru
 
     this.dailyLoss = 0;
     this.dailyProfit = 0;
@@ -37,13 +37,13 @@ class GameService {
     }
     this.dailyLoss = stats.totalHouseLoss;
     this.dailyProfit = stats.totalHouseProfit;
-    console.log(` Daily Stats Initialized: Loss: ${this.dailyLoss}, Profit: ${this.dailyProfit}`);
+    console.log(`✅ Daily Stats Initialized: Loss: ${this.dailyLoss}, Profit: ${this.dailyProfit}`);
   }
 
   async checkDailyReset() {
     const today = new Date().toISOString().split('T')[0];
     if (this.currentDate !== today) {
-      console.log(` Daily Reset Triggered: ${this.currentDate} -> ${today}`);
+      console.log(`🔄 Daily Reset Triggered: ${this.currentDate} -> ${today}`);
       this.currentDate = today;
       this.dailyLoss = 0;
       this.dailyProfit = 0;
@@ -56,22 +56,20 @@ class GameService {
     this.startTimer();
   }
 
-  setSocketMapping(userId, socketId) {
-    this.userIdToSocket.set(userId, socketId);
+  setSocketMapping(firebaseUid, socketId) {
+    this.userIdToSocket.set(firebaseUid, socketId);
   }
 
-  removeSocketMapping(userId) {
-    this.userIdToSocket.delete(userId);
+  removeSocketMapping(firebaseUid) {
+    this.userIdToSocket.delete(firebaseUid);
   }
 
-  updateUserCache(userId, bet) {
-    let data = this.userLastBets.get(userId) || { bets: [], lastActive: Date.now() };
-
+  updateUserCache(firebaseUid, bet) {
+    let data = this.userLastBets.get(firebaseUid) || { bets: [], lastActive: Date.now() };
     data.bets.push(bet);
     if (data.bets.length > 5) data.bets.shift();
     data.lastActive = Date.now();
-
-    this.userLastBets.set(userId, data);
+    this.userLastBets.set(firebaseUid, data);
 
     if (this.userLastBets.size > 10000) {
       this.userLastBets.clear();
@@ -80,15 +78,15 @@ class GameService {
 
   cleanupUserCache() {
     const oneHourAgo = Date.now() - (60 * 60 * 1000);
-    for (const [userId, data] of this.userLastBets.entries()) {
+    for (const [uid, data] of this.userLastBets.entries()) {
       if (data.lastActive < oneHourAgo) {
-        this.userLastBets.delete(userId);
+        this.userLastBets.delete(uid);
       }
     }
   }
 
-  isUserHighRisk(userId, curAmount) {
-    const data = this.userLastBets.get(userId);
+  isUserHighRisk(firebaseUid, curAmount) {
+    const data = this.userLastBets.get(firebaseUid);
     const history = data ? data.bets : null;
     if (!history || history.length < 3) return false;
 
@@ -106,21 +104,22 @@ class GameService {
     return false;
   }
 
-
   generateResult() {
     const totals = this.currentRound.totals;
+    const totalAmount = totals.Lion + totals.Tiger + totals.Draw;
     const exposures = {
       Lion: Math.floor(totals.Lion * 1.9),
       Tiger: Math.floor(totals.Tiger * 1.9),
       Draw: Math.floor(totals.Draw * 9)
     };
 
+    // 🔴 Rule 1: Daily Limit Check (Hard Control)
     const isDailyLimitExceeded = this.dailyLoss - this.dailyProfit >= this.DAILY_MAX_LOSS_LIMIT;
     if (isDailyLimitExceeded) {
       return ["Lion", "Tiger", "Draw"].sort((a, b) => exposures[a] - exposures[b])[0];
     }
 
-    const totalAmount = totals.Lion + totals.Tiger + totals.Draw;
+    // 🟢 Rule 2: Low Amount (Fair Game)
     if (totalAmount < this.HOUSE_EDGE_THRESHOLD) {
       const hash = crypto.randomBytes(16).toString('hex');
       const r = parseInt(hash.substring(0, 8), 16) / 0xFFFFFFFF;
@@ -129,10 +128,24 @@ class GameService {
       return "Draw";
     }
 
+    // 🟡 Rule 3: Dynamic House Edge (Making it look natural)
     const sortedSides = ["Lion", "Tiger", "Draw"].sort((a, b) => exposures[a] - exposures[b]);
+    
+    // Scale probability: Jiyada Amount = Jiyada House Bias (Max 82%)
+    const minHouseBias = 0.65; // Base 65% house wins
+    const maxHouseBias = 0.82; // Max 82% house wins
+    const intensity = Math.min(1, totalAmount / this.EXPOSURE_LIMIT_PER_ROUND);
+    const houseWinProb = minHouseBias + (intensity * (maxHouseBias - minHouseBias));
+
     const rand = Math.random();
-    if (rand < 0.70) return sortedSides[0];
-    if (rand < 0.90) return sortedSides[1] || sortedSides[0];
+    
+    // Most of the time: House takes the least exposure side
+    if (rand < houseWinProb) return sortedSides[0];
+    
+    // 10-15% chance: Second best side (Buffer)
+    if (rand < 0.92) return sortedSides[1] || sortedSides[0];
+    
+    // 8% Luck Factor: User wins even on large bet (Trust builder)
     return sortedSides[2] || sortedSides[0];
   }
 
@@ -153,33 +166,41 @@ class GameService {
     }
 
     const multiplier = winner === "Draw" ? 9 : 1.9;
+
     const roundHousePayout = roundBets.reduce((acc, bet) => {
       if (bet.side === winner) {
         return acc + Math.floor(bet.amount * multiplier);
       }
       return acc;
     }, 0);
-    const roundHouseRevenue = this.currentRound.totals.Lion + this.currentRound.totals.Tiger + this.currentRound.totals.Draw;
+
+    const roundHouseRevenue =
+      this.currentRound.totals.Lion +
+      this.currentRound.totals.Tiger +
+      this.currentRound.totals.Draw;
 
     const payoutPromises = roundBets.map(async (bet) => {
       const isWinner = bet.side === winner;
       const payout = isWinner ? Math.floor(bet.amount * multiplier) : 0;
 
+      // Bet settle karo
       const updateBet = Bet.findOneAndUpdate(
         { userId: bet.userId, roundId: bet.roundId },
         { won: isWinner, payout, status: "settled" }
       );
 
+      // Winner ko coins credit karo — WePlayChat User collection mein
       let updateUser = null;
       if (isWinner && payout > 0) {
         updateUser = User.findOneAndUpdate(
-          { userId: bet.userId },
-          { $inc: { balance: payout } }
+          { firebaseUid: bet.userId },
+          { $inc: { coin: payout } }   // ✅ coin field, WePlayChat wala
         );
       }
 
       await Promise.all([updateBet, updateUser].filter(p => p !== null));
 
+      // Cache update
       this.updateUserCache(bet.userId, {
         amount: bet.amount,
         side: bet.side,
@@ -187,13 +208,14 @@ class GameService {
         roundId: rid
       });
 
+      // User ko result emit karo
       const socketId = this.userIdToSocket.get(bet.userId);
       if (socketId && this.io) {
-        const user = await User.findOne({ userId: bet.userId }).select('balance');
+        const user = await User.findOne({ firebaseUid: bet.userId }).select('coin');
         this.io.to(socketId).emit('betResult', {
           won: isWinner,
           payout,
-          balance: user ? user.balance : 0
+          coin: user ? user.coin : 0   // ✅ coin field
         });
       }
     });
@@ -202,6 +224,7 @@ class GameService {
 
     this.dailyLoss += roundHousePayout;
     this.dailyProfit += roundHouseRevenue;
+
     await DailyStat.findOneAndUpdate(
       { date: this.currentDate },
       { $inc: { totalHouseLoss: roundHousePayout, totalHouseProfit: roundHouseRevenue } }
@@ -209,6 +232,7 @@ class GameService {
 
     await new Promise(resolve => setTimeout(resolve, 4000));
 
+    // Naya round start
     this.currentRound = {
       roundId: uuidv4(),
       time: 15,
@@ -237,14 +261,18 @@ class GameService {
     }, 1000);
   }
 
-  getCurrentRound() { return this.currentRound; }
+  getCurrentRound() {
+    return this.currentRound;
+  }
 
   addBetToCache(bet) {
     if (this.currentRound.status !== "betting") throw new Error("Betting is closed");
     if (this.currentRound.time <= 3) throw new Error("Too late to bet");
 
     const multiplier = bet.side === "Draw" ? 9 : 1.9;
-    const exposure = Math.floor((this.currentRound.totals[bet.side] + bet.amount) * multiplier);
+    const exposure = Math.floor(
+      (this.currentRound.totals[bet.side] + bet.amount) * multiplier
+    );
 
     if (exposure > this.EXPOSURE_LIMIT_PER_ROUND) throw new Error("Pool limit reached");
 
