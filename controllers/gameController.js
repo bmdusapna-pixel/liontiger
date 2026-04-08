@@ -3,9 +3,10 @@ import Bet from '../models/Bet.js';
 import RoundResult from '../models/RoundResult.js';
 import gameService from '../services/gameService.js';
 
-// ✅ Wallet fetch — firebaseUid se
+const GAME_TAG = "lion_tiger"; // ✅ Ek jagah define
+
 export const getWallet = async (req, res) => {
-  const { userId } = req.params; // userId = firebaseUid
+  const { userId } = req.params;
   try {
     const user = await User.findOne({ firebaseUid: userId }).select('coin uniqueId name');
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -15,7 +16,6 @@ export const getWallet = async (req, res) => {
   }
 };
 
-// ✅ Current round
 export const getCurrentRound = (req, res) => {
   const round = gameService.getCurrentRound();
   res.json({
@@ -26,11 +26,12 @@ export const getCurrentRound = (req, res) => {
   });
 };
 
-// ✅ Bet history — firebaseUid se
 export const getHistory = async (req, res) => {
-  const { userId } = req.params; // userId = firebaseUid
+  const { userId } = req.params;
   try {
-    const bets = await Bet.find({ userId }).sort({ timestamp: -1 }).limit(50);
+    const bets = await Bet.find({ userId, game: GAME_TAG }) // ✅ game filter
+      .sort({ timestamp: -1 })
+      .limit(50);
     res.json(bets.map(bet => ({
       roundId: bet.roundId,
       side: bet.side,
@@ -45,11 +46,8 @@ export const getHistory = async (req, res) => {
   }
 };
 
-// ✅ Place bet via HTTP — firebaseUid as userId
 export const placeBet = async (req, res) => {
   const { userId, roundId, side, amount } = req.body;
-  // userId = firebaseUid (Flutter se aayega)
-
   const parsedAmount = Math.floor(parseInt(amount));
 
   if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
@@ -58,8 +56,8 @@ export const placeBet = async (req, res) => {
   if (parsedAmount < 10) {
     return res.status(400).json({ success: false, message: "Minimum bet 10 coins" });
   }
-  if (parsedAmount > 50000) {
-    return res.status(400).json({ success: false, message: "Maximum bet 50,000 coins" });
+  if (parsedAmount > 100000) {
+    return res.status(400).json({ success: false, message: "Maximum bet  1,00,000 coins" });
   }
 
   const currentRound = gameService.getCurrentRound();
@@ -80,44 +78,36 @@ export const placeBet = async (req, res) => {
   }
 
   try {
-    // ✅ WePlayChat User collection se coin deduct
     const user = await User.findOneAndUpdate(
-      {
-        firebaseUid: userId,
-        coin: { $gte: parsedAmount },
-        isBlock: false             // Blocked users bet nahi kar sakte
-      },
+      { firebaseUid: userId, coin: { $gte: parsedAmount }, isBlock: false },
       { $inc: { coin: -parsedAmount } },
       { new: true }
     );
 
     if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient coins or user not found"
-      });
+      return res.status(400).json({ success: false, message: "Insufficient coins or user not found" });
     }
 
-    const bet = { userId, roundId, side, amount: parsedAmount, timestamp: Date.now() };
+    const bet = {
+      game: GAME_TAG, // ✅ game tag
+      userId,
+      roundId,
+      side,
+      amount: parsedAmount,
+      timestamp: Date.now()
+    };
 
     await Bet.create({ ...bet, won: false, payout: 0, status: "pending" });
 
     try {
       gameService.addBetToCache(bet);
     } catch (cacheErr) {
-      // Rollback — coin wapas karo
       await User.findOneAndUpdate({ firebaseUid: userId }, { $inc: { coin: parsedAmount } });
-      await Bet.deleteOne({ userId, roundId });
+      await Bet.deleteOne({ userId, roundId, game: GAME_TAG });
       return res.status(400).json({ success: false, message: cacheErr.message });
     }
 
-    res.json({
-      success: true,
-      message: "Bet placed!",
-      coin: user.coin,             // ✅ coin return
-      side,
-      amount: parsedAmount
-    });
+    res.json({ success: true, message: "Bet placed!", coin: user.coin, side, amount: parsedAmount });
 
   } catch (err) {
     console.error("Bet error:", err);
@@ -125,9 +115,10 @@ export const placeBet = async (req, res) => {
   }
 };
 
-// ✅ Recent results
 export const getRecentResults = async (req, res) => {
   try {
+    // RoundResult already sirf lion_tiger ke hain (alag collection)
+    // Agar dono games ke results same collection mein hain tab filter lagao
     const results = await RoundResult.find().sort({ timestamp: -1 }).limit(50);
     res.json(results);
   } catch (err) {
@@ -135,7 +126,6 @@ export const getRecentResults = async (req, res) => {
   }
 };
 
-// ✅ Round stats
 export const getRoundStats = (req, res) => {
   const round = gameService.getCurrentRound();
   res.json({ roundId: round.roundId, totals: round.totals });

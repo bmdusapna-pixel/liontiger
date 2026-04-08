@@ -130,7 +130,7 @@ class GameService {
 
     // 🟡 Rule 3: Dynamic House Edge (Making it look natural)
     const sortedSides = ["Lion", "Tiger", "Draw"].sort((a, b) => exposures[a] - exposures[b]);
-    
+
     // Scale probability: Jiyada Amount = Jiyada House Bias (Max 82%)
     const minHouseBias = 0.65; // Base 65% house wins
     const maxHouseBias = 0.82; // Max 82% house wins
@@ -138,13 +138,13 @@ class GameService {
     const houseWinProb = minHouseBias + (intensity * (maxHouseBias - minHouseBias));
 
     const rand = Math.random();
-    
+
     // Most of the time: House takes the least exposure side
     if (rand < houseWinProb) return sortedSides[0];
-    
+
     // 10-15% chance: Second best side (Buffer)
     if (rand < 0.92) return sortedSides[1] || sortedSides[0];
-    
+
     // 8% Luck Factor: User wins even on large bet (Trust builder)
     return sortedSides[2] || sortedSides[0];
   }
@@ -184,8 +184,9 @@ class GameService {
       const payout = isWinner ? Math.floor(bet.amount * multiplier) : 0;
 
       // Bet settle karo
+      // processRoundEnd mein — Bet.findOneAndUpdate query mein game filter
       const updateBet = Bet.findOneAndUpdate(
-        { userId: bet.userId, roundId: bet.roundId },
+        { userId: bet.userId, roundId: bet.roundId, game: "lion_tiger" }, // ✅
         { won: isWinner, payout, status: "settled" }
       );
 

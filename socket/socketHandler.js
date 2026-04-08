@@ -29,8 +29,8 @@ const socketHandler = (io) => {
       if (parsedAmount < 10) {
         return socket.emit('error', { message: "Minimum bet 10 coins" });
       }
-      if (parsedAmount > 50000) {
-        return socket.emit('error', { message: "Maximum bet 50,000 coins" });
+      if (parsedAmount > 100000) {
+        return socket.emit('error', { message: "Maximum bet 1,00,000 coins" });
       }
 
       const currentRound = gameService.getCurrentRound();
@@ -70,7 +70,14 @@ const socketHandler = (io) => {
           return socket.emit('error', { message: "Insufficient coins or user not found" });
         }
 
-        const bet = { userId, roundId, side, amount: parsedAmount, timestamp: now };
+        const bet = {
+          game: "lion_tiger", // ✅ Add karo
+          userId,
+          roundId,
+          side,
+          amount: parsedAmount,
+          timestamp: now
+        };
 
         await Bet.create({ ...bet, won: false, payout: 0, status: "pending" });
 
