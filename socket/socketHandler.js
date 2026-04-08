@@ -29,8 +29,8 @@ const socketHandler = (io) => {
       if (parsedAmount < 10) {
         return socket.emit('error', { message: "Minimum bet 10 coins" });
       }
-      if (parsedAmount > 100000) {
-        return socket.emit('error', { message: "Maximum bet 1,00,000 coins" });
+      if (parsedAmount > 10000000) {
+        return socket.emit('error', { message: "Maximum bet 1,00,00,000 coins" });
       }
 
       const currentRound = gameService.getCurrentRound();

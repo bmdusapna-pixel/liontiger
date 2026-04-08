@@ -56,8 +56,8 @@ export const placeBet = async (req, res) => {
   if (parsedAmount < 10) {
     return res.status(400).json({ success: false, message: "Minimum bet 10 coins" });
   }
-  if (parsedAmount > 100000) {
-    return res.status(400).json({ success: false, message: "Maximum bet  1,00,000 coins" });
+  if (parsedAmount > 10000000) {
+    return res.status(400).json({ success: false, message: "Maximum bet  1,00,00,000 coins" });
   }
 
   const currentRound = gameService.getCurrentRound();
@@ -117,9 +117,9 @@ export const placeBet = async (req, res) => {
 
 export const getRecentResults = async (req, res) => {
   try {
-    // RoundResult already sirf lion_tiger ke hain (alag collection)
-    // Agar dono games ke results same collection mein hain tab filter lagao
-    const results = await RoundResult.find().sort({ timestamp: -1 }).limit(50);
+    const results = await RoundResult.find({ game: "lion_tiger" }) // ✅
+      .sort({ timestamp: -1 })
+      .limit(50);
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: "Server error" });
