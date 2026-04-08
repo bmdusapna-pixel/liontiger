@@ -16,7 +16,7 @@ const socketHandler = (io) => {
       // Rate limiting
       const now = Date.now();
       const lastBet = betTimeouts.get(socket.id);
-      if (lastBet && now - lastBet < 2000) {
+      if (lastBet && now - lastBet < 300) {
         return socket.emit('error', { message: "Too many requests. Please wait." });
       }
       betTimeouts.set(socket.id, now);
@@ -49,11 +49,6 @@ const socketHandler = (io) => {
         return socket.emit('error', { message: "Betting is closed" });
       }
 
-      const existingBet = currentRound.bets.find(b => b.userId === userId);
-      if (existingBet) {
-        return socket.emit('error', { message: "Already bet this round" });
-      }
-
       try {
         // ✅ WePlayChat User collection se coin deduct
         const user = await User.findOneAndUpdate(
@@ -70,23 +65,26 @@ const socketHandler = (io) => {
           return socket.emit('error', { message: "Insufficient coins or user not found" });
         }
 
-        const bet = {
-          game: "lion_tiger", // ✅ Add karo
+        // Create the bet document first to get the _id
+        const createdBet = await Bet.create({
+          game: "lion_tiger",
           userId,
           roundId,
           side,
           amount: parsedAmount,
+          won: false,
+          payout: 0,
+          status: "pending",
           timestamp: now
-        };
-
-        await Bet.create({ ...bet, won: false, payout: 0, status: "pending" });
+        });
 
         try {
-          gameService.addBetToCache(bet);
+          // Pass the created document to cache (it contains _id)
+          gameService.addBetToCache(createdBet);
         } catch (cacheErr) {
           // Rollback
           await User.findOneAndUpdate({ firebaseUid: userId }, { $inc: { coin: parsedAmount } });
-          await Bet.deleteOne({ userId, roundId });
+          await Bet.deleteOne({ _id: createdBet._id });
           return socket.emit('error', { message: cacheErr.message });
         }
 

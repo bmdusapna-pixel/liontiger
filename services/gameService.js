@@ -188,9 +188,8 @@ class GameService {
       const payout = isWinner ? Math.floor(bet.amount * multiplier) : 0;
 
       // Bet settle karo
-      // processRoundEnd mein — Bet.findOneAndUpdate query mein game filter
       const updateBet = Bet.findOneAndUpdate(
-        { userId: bet.userId, roundId: bet.roundId, game: "lion_tiger" }, // ✅
+        { _id: bet._id }, 
         { won: isWinner, payout, status: "settled" }
       );
 

@@ -72,11 +72,6 @@ export const placeBet = async (req, res) => {
     return res.status(400).json({ success: false, message: "Betting is closed" });
   }
 
-  const existingBet = currentRound.bets.find(b => b.userId === userId);
-  if (existingBet) {
-    return res.status(400).json({ success: false, message: "Already bet this round" });
-  }
-
   try {
     const user = await User.findOneAndUpdate(
       { firebaseUid: userId, coin: { $gte: parsedAmount }, isBlock: false },
@@ -88,22 +83,23 @@ export const placeBet = async (req, res) => {
       return res.status(400).json({ success: false, message: "Insufficient coins or user not found" });
     }
 
-    const bet = {
-      game: GAME_TAG, // ✅ game tag
+    const createdBet = await Bet.create({
+      game: GAME_TAG,
       userId,
       roundId,
       side,
       amount: parsedAmount,
+      won: false,
+      payout: 0,
+      status: "pending",
       timestamp: Date.now()
-    };
-
-    await Bet.create({ ...bet, won: false, payout: 0, status: "pending" });
+    });
 
     try {
-      gameService.addBetToCache(bet);
+      gameService.addBetToCache(createdBet);
     } catch (cacheErr) {
       await User.findOneAndUpdate({ firebaseUid: userId }, { $inc: { coin: parsedAmount } });
-      await Bet.deleteOne({ userId, roundId, game: GAME_TAG });
+      await Bet.deleteOne({ _id: createdBet._id });
       return res.status(400).json({ success: false, message: cacheErr.message });
     }
 
