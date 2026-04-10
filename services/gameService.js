@@ -193,12 +193,18 @@ class GameService {
         { won: isWinner, payout, status: "settled" }
       );
 
-      // Winner ko coins credit karo — WePlayChat User collection mein
+      // Winner ko coins credit karo ya Loser ka spentCoins update karo
       let updateUser = null;
       if (isWinner && payout > 0) {
         updateUser = User.findOneAndUpdate(
           { firebaseUid: bet.userId },
           { $inc: { coin: payout } }   // ✅ coin field, WePlayChat wala
+        );
+      } else {
+        // Agar user hara (lost), toh spentCoins field update karo (only lost amount)
+        updateUser = User.findOneAndUpdate(
+          { firebaseUid: bet.userId },
+          { $inc: { spentCoins: bet.amount } }
         );
       }
 
