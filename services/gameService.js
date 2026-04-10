@@ -183,9 +183,12 @@ class GameService {
       this.currentRound.totals.Tiger +
       this.currentRound.totals.Draw;
 
+    console.log(`🎲 Winner: ${winner}, Multiplier: ${multiplier}`);
+
     const payoutPromises = roundBets.map(async (bet) => {
       const isWinner = bet.side === winner;
       const payout = isWinner ? Math.floor(bet.amount * multiplier) : 0;
+      console.log(`👤 User: ${bet.userId}, Side: ${bet.side}, Won: ${isWinner}, Payout: ${payout}`);
 
       // Bet settle karo
       const updateBet = Bet.findOneAndUpdate(
